@@ -1,11 +1,51 @@
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-from app.api.webhook_routes import router
+from app.api.webhook_routes import (
+    get_orchestrator_factory,
+    router
+)
+
+
+class FakeAgentOrchestrator:
+
+    def __init__(self):
+        self.received_pull_requests = []
+
+    def review_pull_request(
+        self,
+        pull_request_id: int
+    ) -> dict:
+
+        self.received_pull_requests.append(
+            pull_request_id
+        )
+
+        return {
+            "review_status": "review_published",
+            "selected_agents": [
+                "BitbucketAgent",
+                "RepoGitAgent",
+                "RAGAgent"
+            ]
+        }
 
 
 app = FastAPI()
 app.include_router(router)
+
+fake_orchestrator = FakeAgentOrchestrator()
+
+
+def create_fake_orchestrator(
+) -> FakeAgentOrchestrator:
+
+    return fake_orchestrator
+
+
+app.dependency_overrides[
+    get_orchestrator_factory
+] = lambda: create_fake_orchestrator
 
 client = TestClient(app)
 
@@ -59,7 +99,7 @@ def main():
     )
 
     print(
-        "Accepted webhook endpoint test"
+        "Accepted webhook orchestration test"
     )
 
     print(
@@ -73,18 +113,13 @@ def main():
     )
 
     print(
-        "Should review: "
-        f'{accepted_result["should_review"]}'
-    )
-
-    print(
         "Pull Request ID: "
         f'{accepted_result["pull_request_id"]}'
     )
 
     print(
-        "Repository: "
-        f'{accepted_result["repository"]}'
+        "Fake orchestrator calls: "
+        f"{fake_orchestrator.received_pull_requests}"
     )
 
     assert (
@@ -93,12 +128,13 @@ def main():
 
     assert (
         accepted_result["status"]
-        == "accepted"
+        == "review_scheduled"
     )
 
     assert (
-        accepted_result["should_review"]
-        is True
+        fake_orchestrator
+        .received_pull_requests
+        == [1]
     )
 
     ignored_response = client.post(
@@ -116,10 +152,12 @@ def main():
         }
     )
 
-    ignored_result = ignored_response.json()
+    ignored_result = (
+        ignored_response.json()
+    )
 
     print()
-    print("Ignored webhook endpoint test")
+    print("Ignored webhook event test")
 
     print(
         "HTTP status: "
@@ -132,8 +170,8 @@ def main():
     )
 
     print(
-        "Should review: "
-        f'{ignored_result["should_review"]}'
+        "Fake orchestrator calls: "
+        f"{fake_orchestrator.received_pull_requests}"
     )
 
     assert (
@@ -146,8 +184,9 @@ def main():
     )
 
     assert (
-        ignored_result["should_review"]
-        is False
+        fake_orchestrator
+        .received_pull_requests
+        == [1]
     )
 
     invalid_response = client.post(
@@ -155,10 +194,12 @@ def main():
         json=payload
     )
 
-    invalid_result = invalid_response.json()
+    invalid_result = (
+        invalid_response.json()
+    )
 
     print()
-    print("Invalid webhook endpoint test")
+    print("Invalid webhook event test")
 
     print(
         "HTTP status: "
@@ -176,8 +217,8 @@ def main():
 
     print()
     print(
-        "Bitbucket webhook endpoint "
-        "test successful"
+        "Webhook and orchestrator "
+        "connection test successful"
     )
 
 
