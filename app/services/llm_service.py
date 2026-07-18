@@ -40,6 +40,9 @@ class LLMService:
         self,
         prompt: str
     ) -> str:
+        """
+        Generates a plain-text Pull Request review.
+        """
 
         try:
             response = self.client.responses.create(
@@ -87,6 +90,13 @@ class LLMService:
         self,
         prompt: str
     ) -> dict:
+        """
+        Generates a structured Pull Request review.
+
+        The response contains:
+        - summary
+        - findings
+        """
 
         try:
             response = self.client.responses.create(
@@ -191,5 +201,5 @@ class LLMService:
 
         except OpenAIError as error:
             raise RuntimeError(
-                f"Azure OpenAI request failed: {error}"
+                f"Azure OpenAI request failed: {error}"git status
             ) from error
