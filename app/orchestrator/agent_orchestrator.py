@@ -2,6 +2,7 @@ import hashlib
 import json
 
 from app.agents.bitbucket_agent import BitbucketAgent
+from app.agents.repo_git_agent import RepoGitAgent
 from app.services.bitbucket_service import BitbucketService
 from app.services.diff_service import DiffService
 from app.services.llm_service import LLMService
@@ -11,6 +12,7 @@ class AgentOrchestrator:
 
     def __init__(self):
         self.bitbucket_agent = BitbucketAgent()
+        self.repo_git_agent = RepoGitAgent()
         self.bitbucket_service = BitbucketService()
         self.diff_service = DiffService()
         self.llm_service = LLMService()
@@ -58,7 +60,7 @@ class AgentOrchestrator:
         )
 
         # If the same diff has already been completely
-        # reviewed, stop before calling the LLM.
+        # reviewed, stop before calling any LLM.
         if existing_summary:
             return {
                 "orchestrator": "AgentOrchestrator",
@@ -95,6 +97,18 @@ class AgentOrchestrator:
             .get_pull_request_tasks(
                 pull_request_id
             )
+        )
+
+        repo_git_context = self.repo_git_agent.execute(
+            bitbucket_context
+        )
+
+        selected_agents.append(
+            "RepoGitAgent"
+        )
+
+        collected_context["repo_git"] = (
+            repo_git_context
         )
 
         prompt = self._build_review_prompt(
@@ -414,6 +428,34 @@ class AgentOrchestrator:
             "bitbucket"
         ]
 
+        repo_git_context = collected_context.get(
+            "repo_git",
+            {}
+        )
+
+        repo_git_summary = repo_git_context.get(
+            "summary",
+            ""
+        )
+
+        repo_git_files_json = json.dumps(
+            repo_git_context.get(
+                "files_analyzed",
+                []
+            ),
+            indent=2,
+            ensure_ascii=False
+        )
+
+        repo_git_findings_json = json.dumps(
+            repo_git_context.get(
+                "findings",
+                []
+            ),
+            indent=2,
+            ensure_ascii=False
+        )
+
         title = bitbucket_context["title"]
 
         description = bitbucket_context.get(
@@ -481,6 +523,22 @@ Source branch:
 
 Destination branch:
 {destination_branch}
+
+Specialized repository analysis:
+
+Files analyzed by RepoGitAgent:
+{repo_git_files_json}
+
+RepoGitAgent summary:
+{repo_git_summary}
+
+RepoGitAgent findings:
+{repo_git_findings_json}
+
+Use the RepoGitAgent analysis only as supporting context.
+Validate every final finding against the Pull Request diff.
+Do not copy a RepoGitAgent finding if it is not directly
+supported by the changed code.
 
 Complete Pull Request diff:
 {diff}
