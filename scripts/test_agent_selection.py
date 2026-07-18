@@ -3,49 +3,95 @@ from app.orchestrator.agent_orchestrator import (
 )
 
 
-def print_selection(
-    test_name: str,
-    selection: dict
+def print_agent_decision(
+    agent_name: str,
+    decision: dict
 ):
-    print(f"\n{test_name}")
-    print("-" * len(test_name))
     print(
-        "RepoGitAgent selected: "
-        f'{selection["RepoGitAgent"]["selected"]}'
+        f"{agent_name} selected: "
+        f'{decision["selected"]}'
     )
 
-    print("Reasons:")
-
-    reasons = selection["RepoGitAgent"]["reasons"]
+    reasons = decision["reasons"]
 
     if not reasons:
-        print("- No repository context required")
+        print("- No additional context required")
         return
 
     for reason in reasons:
         print(f"- {reason}")
 
 
+def print_selection(
+    test_name: str,
+    selection: dict
+):
+    print()
+    print(test_name)
+    print("-" * len(test_name))
+
+    print_agent_decision(
+        "RepoGitAgent",
+        selection["RepoGitAgent"]
+    )
+
+    print_agent_decision(
+        "RAGAgent",
+        selection["RAGAgent"]
+    )
+
+
 def main():
-    simple_documentation_context = {
+    documentation_context = {
         "title": "Update README text",
-        "description": "Fix a documentation sentence"
+        "description": (
+            "Fix a general project description"
+        )
     }
 
-    simple_documentation_lines = [
+    documentation_lines = [
         {
             "file": "README.md",
             "line": 10,
-            "code": "Updated project description."
+            "code": (
+                "Updated project description."
+            )
         }
     ]
 
-    code_change_context = {
-        "title": "Add user creation",
-        "description": "Add a new user function"
+    functional_code_context = {
+        "title": "Add calculation function",
+        "description": (
+            "Add a function that calculates a total"
+        )
     }
 
-    code_change_lines = [
+    functional_code_lines = [
+        {
+            "file": "src/calculator.py",
+            "line": 5,
+            "code": (
+                "def calculate_total(items):"
+            )
+        },
+        {
+            "file": "src/calculator.py",
+            "line": 6,
+            "code": (
+                "return sum(items)"
+            )
+        }
+    ]
+
+    security_context = {
+        "title": "Add user creation",
+        "description": (
+            "Create users with username, "
+            "email and password"
+        )
+    }
+
+    security_lines = [
         {
             "file": "src/user_service.py",
             "line": 6,
@@ -57,34 +103,53 @@ def main():
         {
             "file": "src/user_service.py",
             "line": 9,
-            "code": '"password": password,'
+            "code": (
+                '"password": password,'
+            )
         }
     ]
 
-    simple_selection = (
-        AgentOrchestrator.select_context_agents(
-            simple_documentation_context,
-            simple_documentation_lines
+    documentation_selection = (
+        AgentOrchestrator
+        .select_context_agents(
+            documentation_context,
+            documentation_lines
         )
     )
 
-    code_selection = (
-        AgentOrchestrator.select_context_agents(
-            code_change_context,
-            code_change_lines
+    functional_selection = (
+        AgentOrchestrator
+        .select_context_agents(
+            functional_code_context,
+            functional_code_lines
         )
     )
 
-    print("Agent selection test successful")
+    security_selection = (
+        AgentOrchestrator
+        .select_context_agents(
+            security_context,
+            security_lines
+        )
+    )
+
+    print(
+        "Dynamic agent selection test successful"
+    )
 
     print_selection(
         "Simple documentation change",
-        simple_selection
+        documentation_selection
     )
 
     print_selection(
-        "Code and sensitive data change",
-        code_selection
+        "Functional code change",
+        functional_selection
+    )
+
+    print_selection(
+        "Security-sensitive code change",
+        security_selection
     )
 
 

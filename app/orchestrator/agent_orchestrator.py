@@ -2,6 +2,7 @@ import hashlib
 import json
 
 from app.agents.bitbucket_agent import BitbucketAgent
+from app.agents.rag_agent import RAGAgent
 from app.agents.repo_git_agent import RepoGitAgent
 from app.services.bitbucket_service import BitbucketService
 from app.services.diff_service import DiffService
@@ -13,6 +14,8 @@ class AgentOrchestrator:
     def __init__(self):
         self.bitbucket_agent = BitbucketAgent()
         self.repo_git_agent = RepoGitAgent()
+        self.rag_agent = RAGAgent()
+
         self.bitbucket_service = BitbucketService()
         self.diff_service = DiffService()
         self.llm_service = LLMService()
@@ -40,7 +43,9 @@ class AgentOrchestrator:
             diff
         )
 
-        review_id = self._build_review_id(diff)
+        review_id = self._build_review_id(
+            diff
+        )
 
         summary_marker = (
             "<!-- tfm-agent-reviewer:"
@@ -59,8 +64,8 @@ class AgentOrchestrator:
             summary_marker
         )
 
-        # Avoid repeating the complete review when the same
-        # Pull Request diff has already been processed.
+        # Avoid repeating a review when the same diff
+        # has already been completely processed.
         if existing_summary:
             return {
                 "orchestrator": "AgentOrchestrator",
@@ -130,10 +135,27 @@ class AgentOrchestrator:
                 repo_git_context
             )
 
+        rag_decision = agent_selection[
+            "RAGAgent"
+        ]
+
+        if rag_decision["selected"]:
+            rag_context = self.rag_agent.execute(
+                bitbucket_context
+            )
+
+            selected_agents.append(
+                "RAGAgent"
+            )
+
+            collected_context["rag"] = (
+                rag_context
+            )
+
         prompt = self._build_review_prompt(
-            collected_context,
-            added_lines,
-            agent_selection
+            collected_context=collected_context,
+            added_lines=added_lines,
+            agent_selection=agent_selection
         )
 
         structured_review = (
@@ -145,11 +167,11 @@ class AgentOrchestrator:
 
         valid_findings, discarded_findings = (
             self._validate_findings(
-                structured_review.get(
+                findings=structured_review.get(
                     "findings",
                     []
                 ),
-                added_lines
+                added_lines=added_lines
             )
         )
 
@@ -208,7 +230,9 @@ class AgentOrchestrator:
                 comment_action = "created"
                 inline_comments_created += 1
 
-            comment_id = published_comment.get("id")
+            comment_id = published_comment.get(
+                "id"
+            )
 
             if not comment_id:
                 raise RuntimeError(
@@ -293,8 +317,8 @@ class AgentOrchestrator:
                 })
 
         summary_content = self._build_summary_comment(
-            valid_findings,
-            selected_agents
+            findings=valid_findings,
+            selected_agents=selected_agents
         )
 
         summary_content = (
@@ -360,6 +384,16 @@ class AgentOrchestrator:
         added_lines: list[dict]
     ) -> dict:
 
+        title = bitbucket_context.get(
+            "title",
+            ""
+        )
+
+        description = bitbucket_context.get(
+            "description",
+            ""
+        )
+
         changed_files = sorted({
             added_line["file"]
             for added_line in added_lines
@@ -368,12 +402,18 @@ class AgentOrchestrator:
         added_code = "\n".join(
             added_line["code"]
             for added_line in added_lines
+        )
+
+        selection_text = (
+            f"{title}\n"
+            f"{description}\n"
+            f"{added_code}"
         ).lower()
 
-        reasons = []
+        repo_git_reasons = []
 
         if len(changed_files) > 1:
-            reasons.append(
+            repo_git_reasons.append(
                 "The Pull Request modifies multiple files"
             )
 
@@ -385,19 +425,44 @@ class AgentOrchestrator:
             "return ",
             "raise ",
             "try:",
-            "except "
+            "except ",
+            "async ",
+            "await "
         )
 
         if any(
-            indicator in added_code
+            indicator in selection_text
             for indicator in code_structure_indicators
         ):
-            reasons.append(
+            repo_git_reasons.append(
                 "The change modifies executable code "
                 "or program structure"
             )
 
-        sensitive_indicators = (
+        repository_context_indicators = (
+            "service",
+            "model",
+            "repository",
+            "database",
+            "config",
+            "controller",
+            "client",
+            "api"
+        )
+
+        if any(
+            indicator in file_path.lower()
+            for file_path in changed_files
+            for indicator in repository_context_indicators
+        ):
+            repo_git_reasons.append(
+                "The modified file belongs to a component "
+                "that may depend on repository context"
+            )
+
+        rag_reasons = []
+
+        security_indicators = (
             "password",
             "token",
             "secret",
@@ -405,47 +470,71 @@ class AgentOrchestrator:
             "authentication",
             "authorization",
             "permission",
-            "email",
-            "user"
+            "private key",
+            "api key",
+            "sensitive",
+            "security"
         )
 
         if any(
-            indicator in added_code
-            for indicator in sensitive_indicators
+            indicator in selection_text
+            for indicator in security_indicators
         ):
-            reasons.append(
-                "The change contains sensitive or "
-                "identity-related data"
+            rag_reasons.append(
+                "The change contains security-sensitive "
+                "terms that may require project guidelines"
             )
 
-        path_indicators = (
+        policy_indicators = (
+            "policy",
+            "guideline",
+            "standard",
+            "compliance",
+            "architecture rule",
+            "project rule",
+            "internal rule"
+        )
+
+        if any(
+            indicator in selection_text
+            for indicator in policy_indicators
+        ):
+            rag_reasons.append(
+                "The Pull Request refers to a project "
+                "policy, guideline or technical standard"
+            )
+
+        security_path_indicators = (
             "auth",
             "security",
-            "service",
-            "model",
-            "config",
-            "api",
-            "database",
-            "repository"
+            "credential",
+            "permission",
+            "identity"
         )
 
         if any(
             indicator in file_path.lower()
             for file_path in changed_files
-            for indicator in path_indicators
+            for indicator in security_path_indicators
         ):
-            reasons.append(
-                "The modified file belongs to a component "
-                "that may require repository context"
+            rag_reasons.append(
+                "The modified path is related to "
+                "authentication or security"
             )
-
-        repo_git_selected = len(reasons) > 0
 
         return {
             "changed_files": changed_files,
             "RepoGitAgent": {
-                "selected": repo_git_selected,
-                "reasons": reasons
+                "selected": len(
+                    repo_git_reasons
+                ) > 0,
+                "reasons": repo_git_reasons
+            },
+            "RAGAgent": {
+                "selected": len(
+                    rag_reasons
+                ) > 0,
+                "reasons": rag_reasons
             }
         }
 
@@ -551,6 +640,11 @@ class AgentOrchestrator:
             {}
         )
 
+        rag_context = collected_context.get(
+            "rag",
+            {}
+        )
+
         repo_git_summary = repo_git_context.get(
             "summary",
             ""
@@ -572,6 +666,29 @@ class AgentOrchestrator:
             ),
             indent=2,
             ensure_ascii=False
+        )
+
+        rag_documents_json = json.dumps(
+            rag_context.get(
+                "documents_used",
+                []
+            ),
+            indent=2,
+            ensure_ascii=False
+        )
+
+        rag_retrieved_context_json = json.dumps(
+            rag_context.get(
+                "retrieved_context",
+                []
+            ),
+            indent=2,
+            ensure_ascii=False
+        )
+
+        rag_analysis = rag_context.get(
+            "analysis",
+            ""
         )
 
         agent_selection_json = json.dumps(
@@ -604,7 +721,8 @@ class AgentOrchestrator:
         )
 
         return f"""
-You are reviewing a Pull Request.
+You are AgentOrchestrator, responsible for producing the
+final Pull Request review.
 
 The complete diff is provided so that you can understand
 the surrounding code and avoid false positives.
@@ -615,12 +733,14 @@ Prioritize:
 - Security vulnerabilities
 - Functional errors
 - Clear maintainability problems
+- Violations of retrieved project rules
 
 Do not report:
 - Generic best practices
 - Optional improvements
 - Missing functionality that cannot be confirmed
 - Style preferences unless they cause a real problem
+- A project rule that was not included in the RAG context
 
 For each finding:
 
@@ -630,9 +750,8 @@ For each finding:
   demonstrates the problem.
 - Do not attach a finding to a function declaration when a more
   specific problematic line exists.
-- Do not report missing braces, delimiters or syntax elements if
-  they appear as unchanged context in the complete diff.
-- Do not invent file names or line numbers.
+- Do not invent file names, line numbers or project rules.
+- Validate all specialized agent findings against the diff.
 
 Return a maximum of 3 relevant findings.
 
@@ -651,21 +770,31 @@ Destination branch:
 Agent selection decision:
 {agent_selection_json}
 
-Specialized repository analysis:
+RepoGitAgent context:
 
-Files analyzed by RepoGitAgent:
+Files analyzed:
 {repo_git_files_json}
 
-RepoGitAgent summary:
+Repository analysis summary:
 {repo_git_summary}
 
-RepoGitAgent findings:
+Repository findings:
 {repo_git_findings_json}
 
-Use the RepoGitAgent analysis only as supporting context.
-Validate every final finding against the Pull Request diff.
-Do not copy a RepoGitAgent finding if it is not directly
-supported by the changed code.
+RAGAgent context:
+
+Documents used:
+{rag_documents_json}
+
+Retrieved documentation:
+{rag_retrieved_context_json}
+
+Documentation analysis:
+{rag_analysis}
+
+Use RepoGitAgent and RAGAgent only as supporting context.
+Every final finding must still be directly supported by the
+changed code and anchored to an allowed added line.
 
 Complete Pull Request diff:
 {diff}
@@ -700,11 +829,18 @@ Allowed added lines:
             )
 
             if finding_location in valid_locations:
-                valid_findings.append(finding)
+                valid_findings.append(
+                    finding
+                )
             else:
-                discarded_findings.append(finding)
+                discarded_findings.append(
+                    finding
+                )
 
-        return valid_findings, discarded_findings
+        return (
+            valid_findings,
+            discarded_findings
+        )
 
     def _build_summary_comment(
         self,
@@ -733,8 +869,10 @@ Allowed added lines:
 
             if severity == "High":
                 high_count += 1
+
             elif severity == "Medium":
                 medium_count += 1
+
             elif severity == "Low":
                 low_count += 1
 
@@ -789,4 +927,6 @@ Allowed added lines:
             "converted into Pull Request tasks."
         ])
 
-        return "\n".join(summary_lines)
+        return "\n".join(
+            summary_lines
+        )
