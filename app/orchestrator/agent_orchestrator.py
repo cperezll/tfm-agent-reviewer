@@ -59,13 +59,20 @@ class AgentOrchestrator:
             summary_marker
         )
 
-        # If the same diff has already been completely
-        # reviewed, stop before calling any LLM.
+        # Avoid repeating the complete review when the same
+        # Pull Request diff has already been processed.
         if existing_summary:
             return {
                 "orchestrator": "AgentOrchestrator",
                 "pull_request_id": pull_request_id,
                 "selected_agents": selected_agents,
+                "agent_selection": {
+                    "status": "not_evaluated",
+                    "reason": (
+                        "The same Pull Request diff "
+                        "was already reviewed"
+                    )
+                },
                 "context": collected_context,
                 "review": None,
                 "published_inline_comments": [],
@@ -99,21 +106,34 @@ class AgentOrchestrator:
             )
         )
 
-        repo_git_context = self.repo_git_agent.execute(
-            bitbucket_context
+        agent_selection = self.select_context_agents(
+            bitbucket_context,
+            added_lines
         )
 
-        selected_agents.append(
+        repo_git_decision = agent_selection[
             "RepoGitAgent"
-        )
+        ]
 
-        collected_context["repo_git"] = (
-            repo_git_context
-        )
+        if repo_git_decision["selected"]:
+            repo_git_context = (
+                self.repo_git_agent.execute(
+                    bitbucket_context
+                )
+            )
+
+            selected_agents.append(
+                "RepoGitAgent"
+            )
+
+            collected_context["repo_git"] = (
+                repo_git_context
+            )
 
         prompt = self._build_review_prompt(
             collected_context,
-            added_lines
+            added_lines,
+            agent_selection
         )
 
         structured_review = (
@@ -273,7 +293,8 @@ class AgentOrchestrator:
                 })
 
         summary_content = self._build_summary_comment(
-            valid_findings
+            valid_findings,
+            selected_agents
         )
 
         summary_content = (
@@ -293,6 +314,7 @@ class AgentOrchestrator:
             "orchestrator": "AgentOrchestrator",
             "pull_request_id": pull_request_id,
             "selected_agents": selected_agents,
+            "agent_selection": agent_selection,
             "context": collected_context,
             "review": {
                 "summary": summary_content,
@@ -330,6 +352,101 @@ class AgentOrchestrator:
                 discarded_findings
             ),
             "review_status": "review_published"
+        }
+
+    @staticmethod
+    def select_context_agents(
+        bitbucket_context: dict,
+        added_lines: list[dict]
+    ) -> dict:
+
+        changed_files = sorted({
+            added_line["file"]
+            for added_line in added_lines
+        })
+
+        added_code = "\n".join(
+            added_line["code"]
+            for added_line in added_lines
+        ).lower()
+
+        reasons = []
+
+        if len(changed_files) > 1:
+            reasons.append(
+                "The Pull Request modifies multiple files"
+            )
+
+        code_structure_indicators = (
+            "def ",
+            "class ",
+            "import ",
+            "from ",
+            "return ",
+            "raise ",
+            "try:",
+            "except "
+        )
+
+        if any(
+            indicator in added_code
+            for indicator in code_structure_indicators
+        ):
+            reasons.append(
+                "The change modifies executable code "
+                "or program structure"
+            )
+
+        sensitive_indicators = (
+            "password",
+            "token",
+            "secret",
+            "credential",
+            "authentication",
+            "authorization",
+            "permission",
+            "email",
+            "user"
+        )
+
+        if any(
+            indicator in added_code
+            for indicator in sensitive_indicators
+        ):
+            reasons.append(
+                "The change contains sensitive or "
+                "identity-related data"
+            )
+
+        path_indicators = (
+            "auth",
+            "security",
+            "service",
+            "model",
+            "config",
+            "api",
+            "database",
+            "repository"
+        )
+
+        if any(
+            indicator in file_path.lower()
+            for file_path in changed_files
+            for indicator in path_indicators
+        ):
+            reasons.append(
+                "The modified file belongs to a component "
+                "that may require repository context"
+            )
+
+        repo_git_selected = len(reasons) > 0
+
+        return {
+            "changed_files": changed_files,
+            "RepoGitAgent": {
+                "selected": repo_git_selected,
+                "reasons": reasons
+            }
         }
 
     def _build_review_id(
@@ -421,7 +538,8 @@ class AgentOrchestrator:
     def _build_review_prompt(
         self,
         collected_context: dict,
-        added_lines: list[dict]
+        added_lines: list[dict],
+        agent_selection: dict
     ) -> str:
 
         bitbucket_context = collected_context[
@@ -452,6 +570,12 @@ class AgentOrchestrator:
                 "findings",
                 []
             ),
+            indent=2,
+            ensure_ascii=False
+        )
+
+        agent_selection_json = json.dumps(
+            agent_selection,
             indent=2,
             ensure_ascii=False
         )
@@ -524,6 +648,9 @@ Source branch:
 Destination branch:
 {destination_branch}
 
+Agent selection decision:
+{agent_selection_json}
+
 Specialized repository analysis:
 
 Files analyzed by RepoGitAgent:
@@ -581,13 +708,20 @@ Allowed added lines:
 
     def _build_summary_comment(
         self,
-        findings: list[dict]
+        findings: list[dict],
+        selected_agents: list[str]
     ) -> str:
+
+        selected_agents_text = ", ".join(
+            selected_agents
+        )
 
         if not findings:
             return (
                 "## Automated Pull Request Review\n\n"
-                "No relevant issues found."
+                "No relevant issues found.\n\n"
+                "### Agents used\n\n"
+                f"{selected_agents_text}"
             )
 
         high_count = 0
@@ -612,6 +746,10 @@ Allowed added lines:
             "## Automated Pull Request Review",
             "",
             f"Detected **{len(findings)} relevant issue(s)**.",
+            "",
+            "### Agents used",
+            "",
+            selected_agents_text,
             "",
             "### Severity summary",
             "",
