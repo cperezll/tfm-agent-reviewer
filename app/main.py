@@ -1,7 +1,9 @@
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 from requests.exceptions import RequestException
-from app.agents.bitbucket_agent import BitbucketAgent
+
+from app.orchestrator.agent_orchestrator import AgentOrchestrator
+
 
 app = FastAPI(
     title="TFM Agent Reviewer",
@@ -9,8 +11,10 @@ app = FastAPI(
     version="0.1.0"
 )
 
+
 class PullRequestReviewRequest(BaseModel):
     pull_request_id: int
+
 
 @app.get("/health")
 def health_check():
@@ -23,14 +27,14 @@ def health_check():
 @app.post("/review/pr")
 def review_pull_request(request: PullRequestReviewRequest):
     try:
-        bitbucket_agent = BitbucketAgent()
+        orchestrator = AgentOrchestrator()
 
-        result = bitbucket_agent.execute(
+        result = orchestrator.review_pull_request(
             request.pull_request_id
         )
 
         return {
-            "status": "context_retrieved",
+            "status": result["review_status"],
             "result": result
         }
 
